@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Build and local runtime data
+dist/
+build/
+*.egg-info/
+data/
+models/
+logs/
+*.log
+*.jsonl
+*.sqlite3
+certs/
+*.zip
+
+# Frontend
+node_modules/
+frontend/dist/
+.next/
+.vercel/
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+.agents/
+.gemini/

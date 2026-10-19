@@ -1,0 +1,3 @@
+{
+  "allowed_roles": ["employee", "analyst", "admin"]
+}

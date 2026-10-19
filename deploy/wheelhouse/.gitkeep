@@ -1,0 +1,2 @@
+# Directory placeholder for offline staged wheels.
+# Run deploy/offline-staging.sh to pre-download all pinned wheels here before air-gapped container build.

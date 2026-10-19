@@ -1,0 +1,9 @@
+# Template for deployment authorized approvers configuration
+# Provide actual organization-approved usernames for CAB chairs, SecOps leads, and Change Managers.
+# In production, copy to /etc/intranet-assistant/authorized_approvers.json (mode 0644, root:root).
+# Example syntax (JSON array of usernames matching ^[a-zA-Z0-9_.-]{3,64}$):
+[
+  "secops_lead_actual_username",
+  "cab_chair_actual_username",
+  "change_manager_actual_username"
+]
