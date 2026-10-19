@@ -12,8 +12,10 @@ Spawns an isolated Uvicorn instance strictly under APP_ENV=production with:
 
 import os
 import secrets
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 import requests
@@ -24,24 +26,31 @@ PROD_HOST = "127.0.0.1"
 PROD_PORT = "8001"
 PROD_URL = f"http://{PROD_HOST}:{PROD_PORT}"
 HTTPS_ORIGIN = "https://intranet.company.internal"
-DB_PATH = Path("tests/prod_live_auth.sqlite3").resolve()
-AUDIT_PATH = Path("tests/prod_live_audit.jsonl").resolve()
 
-def setup_production_db():
-    if DB_PATH.exists():
-        DB_PATH.unlink()
+
+def setup_production_db(admin_password: str, db_path: Path):
+    if db_path.exists():
+        db_path.unlink()
     # Create production auth store and provision one genuine production security admin
-    store = SqliteAuthStore(db_path=str(DB_PATH), is_production=True, iterations=600_000)
+    store = SqliteAuthStore(db_path=str(db_path), is_production=True, iterations=600_000)
     store.create_user(
         username="corp.admin",
-        password="CorpAdminSecurePass2026!",
+        password=admin_password,
         full_name="Corporate Security Administrator",
         roles=["admin"],
     )
     print("Provisioned genuine production user 'corp.admin'.")
 
+
 def run_smoke_test():
-    setup_production_db()
+    # Use isolated temporary directory for test DB and audit logs
+    temp_dir = Path(tempfile.mkdtemp(prefix="prod_smoke_")).resolve()
+    db_path = temp_dir / "prod_live_auth.sqlite3"
+    audit_path = temp_dir / "prod_live_audit.jsonl"
+
+    # Generate a fresh ephemeral password for this smoke-test run
+    smoke_admin_password = secrets.token_urlsafe(32)
+    setup_production_db(smoke_admin_password, db_path)
 
     # Generate an ephemeral cryptographically random 256-bit secret key
     ephemeral_secret = secrets.token_hex(32)
@@ -50,9 +59,10 @@ def run_smoke_test():
     # Explicit, isolated production environment dictionary (do not inherit dev env vars or .env defaults)
     clean_env = {
         "PATH": os.environ.get("PATH", ""),
+        "PYTHONPATH": ".",
         "SYSTEMROOT": os.environ.get("SYSTEMROOT", "C:\\Windows"),
-        "TEMP": os.environ.get("TEMP", "C:\\Windows\\Temp"),
-        "TMP": os.environ.get("TMP", "C:\\Windows\\Temp"),
+        "TEMP": str(temp_dir),
+        "TMP": str(temp_dir),
         "APP_ENV": "production",
         "ENABLE_DEVELOPMENT_AUTH": "false",
         "DEBUG": "false",
@@ -62,8 +72,8 @@ def run_smoke_test():
         "AUTH_MODE": "local",
         "HOST": PROD_HOST,
         "PORT": PROD_PORT,
-        "AUTH_DB_PATH": str(DB_PATH),
-        "AUDIT_LOG_PATH": str(AUDIT_PATH),
+        "AUTH_DB_PATH": str(db_path),
+        "AUDIT_LOG_PATH": str(audit_path),
         "DATABASE_URL": "sqlite:///./sample_db.sqlite3",
         "DOCUMENT_ROOTS": '["./sample_docs"]',
         "LLM_ENABLED": "true",
@@ -136,7 +146,7 @@ def run_smoke_test():
             headers={"Origin": HTTPS_ORIGIN},
             json={
                 "username": "corp.admin",
-                "password": "CorpAdminSecurePass2026!",
+                "password": smoke_admin_password,
                 "client_type": "browser",
             },
             timeout=5,
@@ -248,6 +258,11 @@ def run_smoke_test():
         except Exception:
             proc.kill()
         print("Production test server stopped.")
+
+        # Clean up temporary database and audit log directory
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            print("Temporary smoke test artifacts cleaned up.")
 
 if __name__ == "__main__":
     run_smoke_test()
