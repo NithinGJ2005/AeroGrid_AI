@@ -31,13 +31,21 @@ import httpx
 DEFAULT_USER_PASS = os.environ.get("AEROGRID_USER_PASSWORD")
 DEFAULT_ADMIN_PASS = os.environ.get("AEROGRID_ADMIN_PASSWORD", "AdminSecurity2026!")
 
-DEMO_USERS = [
-    ("alice.chen", DEFAULT_USER_PASS or "EngineeringLead2026!"),
-    ("bob.smith", DEFAULT_USER_PASS or "StaffEngineer2026!"),
-    ("david.miller", DEFAULT_USER_PASS or "HRPartner2026!"),
-    ("emma.watson", DEFAULT_USER_PASS or "FinanceAnalyst2026!"),
-    ("admin.system", DEFAULT_ADMIN_PASS),
-]
+DEMO_USERS = (
+    [
+        ("staff.engineer", DEFAULT_USER_PASS or "StagingSecured2026!Run"),
+        ("hr.partner", DEFAULT_USER_PASS or "StagingSecured2026!Run"),
+        ("corp.admin", DEFAULT_ADMIN_PASS or "StagingSecured2026!Run"),
+    ]
+    if os.environ.get("AEROGRID_STAGING_USERS") or os.environ.get("AEROGRID_ADMIN_USER") == "corp.admin"
+    else [
+        ("alice.chen", DEFAULT_USER_PASS or "EngineeringLead2026!"),
+        ("bob.smith", DEFAULT_USER_PASS or "StaffEngineer2026!"),
+        ("david.miller", DEFAULT_USER_PASS or "HRPartner2026!"),
+        ("emma.watson", DEFAULT_USER_PASS or "FinanceAnalyst2026!"),
+        ("admin.system", DEFAULT_ADMIN_PASS),
+    ]
+)
 
 CHAT_QUESTIONS = [
     "What is the standard procedure for password rotations?",

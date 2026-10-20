@@ -18,6 +18,11 @@ services:
     networks:
       - egress_allowed
       - internal_app
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "-qO-", "https://127.0.0.1/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
     depends_on:
       app:
         condition: service_healthy
@@ -47,24 +52,24 @@ services:
       - OIDC_JWKS_URL=${OIDC_JWKS_URL}
       - ROLE_PERMISSION_MAP=${ROLE_PERMISSION_MAP}
       - AUDIT_LOG_PATH=/var/log/app/audit.jsonl
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-["https://intranet.company.internal"]}
-      - DATABASE_URL=${DATABASE_URL}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-["https://intranet-staging.company.internal"]}
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///./sample_db.sqlite3}
       - DATABASE_READ_ONLY=true
-      - LLM_ENABLED=true
-      - LLM_BASE_URL=http://llm-service:8000/v1
-      - LLM_ALLOWED_HOSTS=["llm-service"]
-      - LLM_MODEL=${LLM_MODEL:-qwen2.5:1.5b}
+      - LLM_ENABLED=${LLM_ENABLED:-true}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      - LLM_ALLOWED_HOSTS=${LLM_ALLOWED_HOSTS:-["host.docker.internal"]}
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b}
       - LLM_INTERNAL_ONLY=true
-      - DOCUMENT_ROOTS=["/data/documents"]
+      - DOCUMENT_ROOTS=["/app/sample_docs"]
       - APPROVERS_CONFIG_FILE=/etc/intranet-assistant/authorized_approvers.json
     volumes:
       - audit_data:/var/log/app
-      - auth_data:/data/auth
-      - ${DOCUMENT_STORAGE_PATH:-./sample_docs}:/data/documents:ro
       - ${APPROVERS_CONFIG_HOST_PATH:-./authorized_approvers.json}:/etc/intranet-assistant/authorized_approvers.json:ro
     networks:
       - internal_app
-      - isolated_backend
+      - egress_allowed
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health/live"]
       interval: 15s
@@ -77,6 +82,7 @@ services:
       - /tmp
 
   llm-service:
+    profiles: ["mock-llm"]
     # Staged internal inference engine (vLLM / llama.cpp server)
     # Never downloads models at startup; model weights are mounted read-only.
     image: ${INTERNAL_REGISTRY:-internal-registry.local}/vllm-openai:v0.6.3
@@ -95,6 +101,13 @@ services:
       - ${INTERNAL_MODEL_PATH:-./models}:/models:ro
     networks:
       - isolated_backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
     deploy:
       resources:
         reservations:

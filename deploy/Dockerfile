@@ -34,14 +34,22 @@ RUN if [ -d "./wheelhouse" ] && [ -n "$(find ./wheelhouse -maxdepth 1 -name '*.w
 # Copy application source code and documentation
 COPY app ./app
 COPY docs ./docs
+COPY sample_db.sqlite3 ./sample_db.sqlite3
+COPY sample_docs ./sample_docs
+COPY deploy/authorized_approvers.json ./deploy/authorized_approvers.json
 
 # Stage trusted approver configuration into hardened production location
 RUN mkdir -p /etc/intranet-assistant && \
     cp deploy/authorized_approvers.json /etc/intranet-assistant/authorized_approvers.json && \
     chmod 0644 /etc/intranet-assistant/authorized_approvers.json
 
+# Pre-stage auth and log directories with non-root ownership
+RUN mkdir -p /data/auth /var/log/app
+COPY deploy/auth.staging.sqlite3 /data/auth/auth.sqlite3
+
 # Ensure strict file ownership
-RUN chown -R appuser:appgroup /app
+RUN chown -R appuser:appgroup /app /data/auth /var/log/app && \
+    chmod 0660 /data/auth/auth.sqlite3
 
 USER appuser:appgroup
 
