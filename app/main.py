@@ -10,6 +10,7 @@ from typing import AsyncIterator
 
 from pathlib import Path
 
+import anyio
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -75,11 +76,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     configure_logging()
     logger.info("application_starting", extra={"environment": settings.app_env.value})
+    try:
+        limiter_tokens = getattr(settings, "anyio_thread_limiter", 60)
+        anyio.to_thread.current_default_thread_limiter().total_tokens = limiter_tokens
+    except Exception:
+        pass
     app.state.ready = True
     try:
         yield
     finally:
         app.state.ready = False
+        llm_client = getattr(app.state, "llm_client", None)
+        if llm_client is not None:
+            if hasattr(llm_client, "aclose"):
+                await llm_client.aclose()
+            elif hasattr(llm_client, "close"):
+                llm_client.close()
         logger.info("application_stopped")
 
 
@@ -351,7 +363,7 @@ def create_app(
         import secrets
 
         account_store: AccountStore = app.state.account_store
-        account = account_store.authenticate(payload.username, payload.password)
+        account = await anyio.to_thread.run_sync(account_store.authenticate, payload.username, payload.password)
         request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 
         if not account:
@@ -632,6 +644,8 @@ def create_app(
             return {
                 "in_flight": snapshot.in_flight,
                 "queue_depth": snapshot.queue_depth,
+                "max_in_flight": snapshot.max_in_flight,
+                "max_queue_depth": snapshot.max_queue_depth,
                 "accepted": snapshot.accepted,
                 "rejected": snapshot.rejected,
                 "failed": snapshot.failed,
@@ -655,7 +669,12 @@ def create_app(
                 "The assistant inference service is not configured or available.",
                 request.state.request_id,
             )
-        result = assistant.ask(payload.message, identity, request.state.request_id)
+        if hasattr(assistant, "aask"):
+            result = await assistant.aask(payload.message, identity, request.state.request_id)
+        else:
+            result = await anyio.to_thread.run_sync(
+                assistant.ask, payload.message, identity, request.state.request_id
+            )
         return ChatResponse(
             response=result.response,
             citations=[
@@ -699,11 +718,12 @@ def create_app(
         payload: MCPCallRequest,
         identity: Identity = Depends(current_identity),
     ) -> MCPCallResponse:
-        result = app.state.tool_registry.execute(
-            tool_name=tool_name,
-            parameters=payload.parameters,
-            identity=identity,
-            request_id=request.state.request_id,
+        result = await anyio.to_thread.run_sync(
+            app.state.tool_registry.execute,
+            tool_name,
+            payload.parameters,
+            identity,
+            request.state.request_id,
         )
         return MCPCallResponse(
             tool=tool_name,

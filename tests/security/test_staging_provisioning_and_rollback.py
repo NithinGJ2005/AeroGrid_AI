@@ -1731,5 +1731,98 @@ def test_approver_configuration_integrity_and_fail_closed_invariants(tmp_path: P
     assert approvers == frozenset({"cab_chair_morris"})
 
 
+def test_compose_model_volume_path_resolution():
+    """Verify that Docker Compose resolves the model volume to deploy/models and detects the ./deploy/models nesting pitfall."""
+    import yaml
 
+    repo_root = Path(__file__).resolve().parents[2]
+    compose_path = repo_root / "deploy" / "docker-compose.yml"
+    assert compose_path.exists()
+
+    content = compose_path.read_text(encoding="utf-8")
+    data = yaml.safe_load(content)
+
+    llm_service = data["services"]["llm-service"]
+    volumes = llm_service["volumes"]
+
+    # 1. Confirm volume definition uses INTERNAL_MODEL_PATH with ./models default
+    model_vol = [v for v in volumes if ":/models" in v][0]
+    assert "${INTERNAL_MODEL_PATH:-./models}:/models:ro" == model_vol
+
+    # 2. Simulate relative path resolution relative to compose file directory (deploy/)
+    compose_dir = compose_path.parent
+
+    # Correct default or explicit ./models resolves to deploy/models
+    correct_default = compose_dir.joinpath("./models").resolve()
+    assert correct_default == (repo_root / "deploy" / "models").resolve()
+
+    # Trap: ./deploy/models erroneously resolves to deploy/deploy/models
+    erroneous_path = compose_dir.joinpath("./deploy/models").resolve()
+    assert erroneous_path == (repo_root / "deploy" / "deploy" / "models").resolve()
+    assert "deploy/deploy" in str(erroneous_path).replace("\\", "/")
+
+
+def test_compose_uvicorn_worker_count_and_model_alias_consistency():
+    """Verify that Compose, Dockerfile, and app/config enforce consistent worker counts and model aliases."""
+    import yaml
+    from app.config import Settings
+    from app.llm.service import LocalLLMClient
+
+    repo_root = Path(__file__).resolve().parents[2]
+    compose_path = repo_root / "deploy" / "docker-compose.yml"
+    dockerfile_path = repo_root / "deploy" / "Dockerfile"
+
+    compose_data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+    dockerfile_text = dockerfile_path.read_text(encoding="utf-8")
+
+    app_svc = compose_data["services"]["app"]
+    llm_svc = compose_data["services"]["llm-service"]
+
+    # 1. Verify app service worker count in Compose and Dockerfile
+    app_env = app_svc.get("environment", [])
+    web_concurrency_env = [e for e in app_env if e.startswith("WEB_CONCURRENCY=")]
+    assert len(web_concurrency_env) == 1
+    assert web_concurrency_env[0] == "WEB_CONCURRENCY=${WEB_CONCURRENCY:-2}"
+
+    app_cmd = app_svc.get("command", [])
+    assert app_cmd == ["--workers", "${WEB_CONCURRENCY:-2}"]
+
+    assert "WEB_CONCURRENCY=2" in dockerfile_text
+    assert 'CMD ["--workers", "2"]' in dockerfile_text
+
+    # 2. Verify vLLM model alias in Compose matches LLM_MODEL
+    llm_cmd = llm_svc.get("command", "")
+    assert "--model /models/${LLM_MODEL:-qwen2.5:1.5b}" in llm_cmd
+    assert "--served-model-name ${LLM_MODEL:-qwen2.5:1.5b}" in llm_cmd
+    assert "--max-num-seqs 2" in llm_cmd
+
+    # 3. Verify app/config.py observes worker count and correctly partitions admission slots
+    settings = Settings(
+        _env_file=None,
+        secret_key="x" * 32,
+        dev_auth_signing_key="y" * 32,
+        llm_enabled=True,
+        llm_base_url="http://llm-service:8000/v1",
+        llm_allowed_hosts=["llm-service"],
+        llm_model="qwen2.5:1.5b",
+        llm_max_concurrent_generations=2,
+        llm_max_queue_depth=10,
+        web_concurrency=2,
+    )
+    assert settings.web_concurrency == 2
+    assert settings.llm_model == "qwen2.5:1.5b"
+    # Also verify the unoverridden default Settings() resolves to qwen2.5:1.5b
+    default_settings = Settings(
+        _env_file=None,
+        secret_key="x" * 32,
+        dev_auth_signing_key="y" * 32,
+    )
+    assert default_settings.llm_model == "qwen2.5:1.5b"
+
+    client = LocalLLMClient(settings)
+    # 2 global generations / 2 workers = 1 active slot per worker
+    assert client._admission._max_in_flight == 1
+    # 10 global queue / 2 workers = 5 queued slots per worker
+    assert client._admission._max_queue_depth == 5
+    client.close()
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
@@ -54,6 +56,7 @@ class Settings(BaseSettings):
     debug: bool = False
     host: str = "127.0.0.1"
     port: int = Field(default=8000, ge=1, le=65535)
+    web_concurrency: int = Field(default=1, ge=1, le=32)
     secret_key: SecretStr = Field(min_length=32)
     enable_development_auth: bool = True
     auth_mode: AuthMode = AuthMode.DEVELOPMENT
@@ -79,7 +82,7 @@ class Settings(BaseSettings):
     llm_enabled: bool = False
     llm_base_url: str | None = None
     llm_allowed_hosts: list[str] = Field(default_factory=list)
-    llm_model: str = Field(default="qwen3-4b-pending-license-review", min_length=1)
+    llm_model: str = Field(default="qwen2.5:1.5b", min_length=1)
     llm_max_output_tokens: int = Field(default=512, ge=1, le=4096)
     llm_context_budget_tokens: int = Field(default=4096, ge=256, le=32768)
     llm_request_timeout_seconds: int = Field(default=60, ge=1, le=600)
@@ -88,16 +91,42 @@ class Settings(BaseSettings):
     llm_max_queue_wait_seconds: int = Field(default=30, ge=0, le=600)
     llm_internal_only: bool = True
     orchestration_max_iterations: int = Field(default=3, ge=1, le=10)
+    anyio_thread_limiter: int = Field(default=60, ge=10, le=1000, description="AnyIO thread pool limiter per process (default 60)")
     dev_demo_accounts: list[dict[str, Any]] = Field(
         default_factory=lambda: [
-            {"username": "alice.chen", "label": "Alice Chen (Engineer)", "roles": ["engineer"], "full_name": "Alice Chen", "password": "EngineeringLead2026!"},
-            {"username": "david.miller", "label": "David Miller (HR)", "roles": ["hr"], "full_name": "David Miller", "password": "HRPartner2026!"},
-            {"username": "bob.smith", "label": "Bob Smith (Employee)", "roles": ["employee"], "full_name": "Bob Smith", "password": "StaffEngineer2026!"},
-            {"username": "emma.watson", "label": "Emma Watson (Analyst)", "roles": ["analyst"], "full_name": "Emma Watson", "password": "FinanceAnalyst2026!"},
-            {"username": "admin.system", "label": "Admin (Security)", "roles": ["admin"], "full_name": "Security Administrator", "password": "AdminSecurity2026!"},
+            {"username": "alice.chen", "label": "Alice Chen (Engineer)", "roles": ["engineer"], "full_name": "Alice Chen", "password": os.environ.get("DEV_DEMO_PASSWORD_ALICE", "EngineeringLead2026!")},
+            {"username": "david.miller", "label": "David Miller (HR)", "roles": ["hr"], "full_name": "David Miller", "password": os.environ.get("DEV_DEMO_PASSWORD_DAVID", "HRPartner2026!")},
+            {"username": "bob.smith", "label": "Bob Smith (Employee)", "roles": ["employee"], "full_name": "Bob Smith", "password": os.environ.get("DEV_DEMO_PASSWORD_BOB", "StaffEngineer2026!")},
+            {"username": "emma.watson", "label": "Emma Watson (Analyst)", "roles": ["analyst"], "full_name": "Emma Watson", "password": os.environ.get("DEV_DEMO_PASSWORD_EMMA", "FinanceAnalyst2026!")},
+            {"username": "admin.system", "label": "Admin (Security)", "roles": ["admin"], "full_name": "Security Administrator", "password": os.environ.get("DEV_DEMO_ADMIN_PASSWORD", "AdminSecurity2026!")},
         ],
         description="Explicit development-only demo accounts. Strictly purged in production.",
     )
+
+    @field_validator("web_concurrency", mode="before")
+    @classmethod
+    def resolve_web_concurrency(cls, v: Any) -> int:
+        if v is not None and v != 1:
+            try:
+                return max(1, int(v))
+            except (ValueError, TypeError):
+                pass
+        env_val = os.environ.get("WEB_CONCURRENCY")
+        if env_val and env_val.strip().isdigit():
+            return max(1, int(env_val.strip()))
+        try:
+            import sys
+            args = sys.argv
+            for i, arg in enumerate(args):
+                if arg in ("--workers", "-w") and i + 1 < len(args) and args[i + 1].isdigit():
+                    return max(1, int(args[i + 1]))
+                if arg.startswith("--workers="):
+                    part = arg.split("=", 1)[1].strip()
+                    if part.isdigit():
+                        return max(1, int(part))
+        except Exception:
+            pass
+        return 1
 
     @field_validator("role_permission_map")
     @classmethod
@@ -157,6 +186,16 @@ class Settings(BaseSettings):
                 raise ValueError("LLM_BASE_URL host must be listed in LLM_ALLOWED_HOSTS")
         if not self.llm_internal_only:
             raise ValueError("LLM_INTERNAL_ONLY must remain true")
+        if self.web_concurrency > self.llm_max_concurrent_generations:
+            raise ValueError(
+                f"Unsupported concurrency configuration: WEB_CONCURRENCY ({self.web_concurrency}) "
+                f"exceeds LLM_MAX_CONCURRENT_GENERATIONS ({self.llm_max_concurrent_generations}). "
+                f"Under process-isolated admission control, each worker process requires at least 1 "
+                f"active slot, which would silently multiply aggregate active generations to {self.web_concurrency}, "
+                f"exceeding the global hardware budget of {self.llm_max_concurrent_generations}. "
+                f"Either increase LLM_MAX_CONCURRENT_GENERATIONS to at least {self.web_concurrency} "
+                f"or reduce WEB_CONCURRENCY to at most {self.llm_max_concurrent_generations}."
+            )
         return self
 
 

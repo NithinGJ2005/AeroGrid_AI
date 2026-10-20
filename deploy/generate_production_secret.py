@@ -59,6 +59,7 @@ COMPOSE_PROJECT_NAME=intranet-assistant
 DEBUG=false
 HOST=0.0.0.0
 PORT=8000
+WEB_CONCURRENCY=2
 
 # Generated 256-bit CSPRNG Production Secret
 SECRET_KEY={secret_key}
@@ -90,7 +91,7 @@ LLM_ENABLED=true
 LLM_BASE_URL=http://llm-service:8000/v1
 LLM_ALLOWED_HOSTS=["llm-service", "127.0.0.1"]
 LLM_INTERNAL_ONLY=true
-LLM_MODEL=qwen3-4b-reviewed
+LLM_MODEL=qwen2.5:1.5b
 ORCHESTRATION_MAX_ITERATIONS=3
 
 # Server-Side RBAC Permission Matrix

@@ -30,11 +30,11 @@ LOCKOUT_ATTEMPTS = 5
 LOCKOUT_DURATION_SECONDS = 900.0  # 15 minutes
 
 DEFAULT_DEV_DEMO_ACCOUNTS: list[dict[str, Any]] = [
-    {"username": "alice.chen", "label": "Alice Chen (Engineer)", "roles": ["engineer"], "full_name": "Alice Chen", "password": "EngineeringLead2026!"},
-    {"username": "david.miller", "label": "David Miller (HR)", "roles": ["hr"], "full_name": "David Miller", "password": "HRPartner2026!"},
-    {"username": "bob.smith", "label": "Bob Smith (Employee)", "roles": ["employee"], "full_name": "Bob Smith", "password": "StaffEngineer2026!"},
-    {"username": "emma.watson", "label": "Emma Watson (Analyst)", "roles": ["analyst"], "full_name": "Emma Watson", "password": "FinanceAnalyst2026!"},
-    {"username": "admin.system", "label": "Admin (Security)", "roles": ["admin"], "full_name": "Security Administrator", "password": "AdminSecurity2026!"},
+    {"username": "alice.chen", "label": "Alice Chen (Engineer)", "roles": ["engineer"], "full_name": "Alice Chen", "password": os.environ.get("DEV_DEMO_PASSWORD_ALICE", "EngineeringLead2026!")},
+    {"username": "david.miller", "label": "David Miller (HR)", "roles": ["hr"], "full_name": "David Miller", "password": os.environ.get("DEV_DEMO_PASSWORD_DAVID", "HRPartner2026!")},
+    {"username": "bob.smith", "label": "Bob Smith (Employee)", "roles": ["employee"], "full_name": "Bob Smith", "password": os.environ.get("DEV_DEMO_PASSWORD_BOB", "StaffEngineer2026!")},
+    {"username": "emma.watson", "label": "Emma Watson (Analyst)", "roles": ["analyst"], "full_name": "Emma Watson", "password": os.environ.get("DEV_DEMO_PASSWORD_EMMA", "FinanceAnalyst2026!")},
+    {"username": "admin.system", "label": "Admin (Security)", "roles": ["admin"], "full_name": "Security Administrator", "password": os.environ.get("DEV_DEMO_ADMIN_PASSWORD", "AdminSecurity2026!")},
 ]
 
 
@@ -709,8 +709,7 @@ class SqliteAuthStore:
             return self._memory_conn
         conn = sqlite3.connect(self.db_path, timeout=10.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA busy_timeout=5000;")
+        conn.execute("PRAGMA busy_timeout=10000;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         return conn
 
@@ -718,6 +717,7 @@ class SqliteAuthStore:
         with self._lock:
             conn = self._connect()
             try:
+                conn.execute("PRAGMA journal_mode=WAL;")
                 with conn:
                     conn.executescript(SCHEMA_SQL)
                     # Lightweight schema migration for existing databases
@@ -855,25 +855,30 @@ class SqliteAuthStore:
 
     def get_user(self, username: str) -> UserAccount | None:
         key = username.strip().lower()
-        with self._lock:
-            conn = self._connect()
-            try:
-                cur = conn.execute("SELECT * FROM accounts WHERE username = ?", (key,))
+        if self._memory_conn is not None:
+            with self._lock:
+                cur = self._memory_conn.execute("SELECT * FROM accounts WHERE username = ?", (key,))
                 row = cur.fetchone()
                 return self._row_to_account(row) if row else None
-            finally:
-                if self._memory_conn is None:
-                    conn.close()
+        conn = self._connect()
+        try:
+            cur = conn.execute("SELECT * FROM accounts WHERE username = ?", (key,))
+            row = cur.fetchone()
+            return self._row_to_account(row) if row else None
+        finally:
+            conn.close()
 
     def list_users(self) -> list[dict[str, object]]:
-        with self._lock:
-            conn = self._connect()
-            try:
-                cur = conn.execute("SELECT * FROM accounts ORDER BY username")
+        if self._memory_conn is not None:
+            with self._lock:
+                cur = self._memory_conn.execute("SELECT * FROM accounts ORDER BY username")
                 return [self._row_to_account(row).to_dict() for row in cur.fetchall()]
-            finally:
-                if self._memory_conn is None:
-                    conn.close()
+        conn = self._connect()
+        try:
+            cur = conn.execute("SELECT * FROM accounts ORDER BY username")
+            return [self._row_to_account(row).to_dict() for row in cur.fetchall()]
+        finally:
+            conn.close()
 
     def create_user(
         self,
@@ -1206,14 +1211,16 @@ class SqliteAuthStore:
 
     def is_revoked(self, jti: str, subject: str = "") -> bool:
         """Check whether a session token is revoked."""
-        with self._lock:
-            conn = self._connect()
-            try:
-                cur = conn.execute("SELECT 1 FROM session_revocations WHERE jti = ?", (jti,))
+        if self._memory_conn is not None:
+            with self._lock:
+                cur = self._memory_conn.execute("SELECT 1 FROM session_revocations WHERE jti = ?", (jti,))
                 return cur.fetchone() is not None
-            finally:
-                if self._memory_conn is None:
-                    conn.close()
+        conn = self._connect()
+        try:
+            cur = conn.execute("SELECT 1 FROM session_revocations WHERE jti = ?", (jti,))
+            return cur.fetchone() is not None
+        finally:
+            conn.close()
 
     def prune_expired(self) -> int:
         """Prune expired session revocations whose JWT expiration time has passed."""

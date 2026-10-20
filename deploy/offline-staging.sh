@@ -30,7 +30,7 @@ ls -lh "${WHEELHOUSE_DIR}"
 echo "[3/3] Model staging verification..."
 if [ -z "$(ls -A "${MODELS_DIR}")" ]; then
     echo "NOTICE: '${MODELS_DIR}' is empty."
-    echo "Transfer the license-reviewed, scanned internal model weights to '${MODELS_DIR}/approved-model' before starting containers."
+    echo "Transfer the license-reviewed, scanned internal model weights to '${MODELS_DIR}/qwen2.5:1.5b' (Hugging Face Safetensors format) before starting containers."
 else
     echo "Staged model files detected in '${MODELS_DIR}'."
 fi

@@ -12,14 +12,16 @@
 ### 1.1 Container & Network Isolation
 - **`reverse-proxy` (`nginx:1.27.2-alpine`)**:
   - Listens on host ports `80` (HTTP) and `443` (HTTPS).
-  - Handles internal CA TLS termination, HTTP-to-HTTPS 301 redirection, HSTS, CSP, and edge rate limiting (`rate=10r/s burst=20 nodelay`, returning HTTP 429).
+  - Handles internal CA TLS termination, HTTP-to-HTTPS 301 redirection, HSTS, CSP, and tiered edge rate limiting (`general_api_zone` 100r/s burst=150 nodelay, `auth_login_zone` 5r/s burst=10 nodelay, `chat_edge_zone` 15r/s burst=25 nodelay, returning HTTP 429), with 64 upstream keepalive connections.
   - Attached to networks: `egress_allowed` (external interface) and `internal_app` (`internal: true`).
 - **`app` (`intranet-assistant-app:1.0.0`)**:
   - Non-root execution (`appuser`, UID 10001, GID 10001).
+  - Explicit two-worker Uvicorn process topology (`WEB_CONCURRENCY=2`, `--workers 2`), partitioning process-local admission control evenly across both worker event loops.
   - **Zero published host ports**. Communicates solely over internal Docker bridge networks.
   - Attached to networks: `internal_app` (`internal: true`) and `isolated_backend` (`internal: true`).
 - **`llm-service` (`internal-registry.local/vllm-openai:v0.6.3`)**:
   - Local internal model weights mounted read-only at `/models`.
+  - Configured with `--model /models/qwen2.5:1.5b` and explicit alias `--served-model-name qwen2.5:1.5b`, matching the `LLM_MODEL=qwen2.5:1.5b` identifier sent by the application.
   - Attached to network: `isolated_backend` (`internal: true`).
 
 ### 1.2 Live Volume & Storage Mapping
@@ -83,7 +85,7 @@ bash deploy/verify_deployment_images.sh
 Transfer license-reviewed model weights and documents to the staging host:
 ```bash
 # Verify model weight digests against approved security manifest
-cd /opt/intranet-assistant/deploy/models/approved-model
+cd /opt/intranet-assistant/deploy/models/qwen2.5:1.5b
 sha256sum -c model_weights.sha256
 
 # Place read-only documents and sidecar ACL manifests
@@ -128,6 +130,7 @@ COMPOSE_PROJECT_NAME=intranet-assistant
 DEBUG=false
 HOST=0.0.0.0
 PORT=8000
+WEB_CONCURRENCY=2
 
 # Generated 256-bit CSPRNG Production Secret (Omitted from logs)
 SECRET_KEY=<GENERATE_FRESH_SECRET_DO_NOT_COMMIT>
@@ -161,7 +164,7 @@ LLM_ENABLED=true
 LLM_BASE_URL=http://llm-service:8000/v1
 LLM_ALLOWED_HOSTS=["llm-service", "127.0.0.1"]
 LLM_INTERNAL_ONLY=true
-LLM_MODEL=qwen3-4b-reviewed
+LLM_MODEL=qwen2.5:1.5b
 ORCHESTRATION_MAX_ITERATIONS=3
 
 # Server-Side RBAC Permission Matrix
@@ -192,14 +195,97 @@ docker compose -p intranet-assistant --env-file .env.staging -f docker-compose.y
 *Note: This live Docker engine validation is distinct from local Python PyYAML syntax parsing and verifies container engine semantics.*
 
 ### Step 3: Validate Nginx Configuration Syntax
-Verify Nginx syntax inside the staging container environment:
+Verify Nginx syntax using the intended Compose service configuration, volumes, and network (starting upstream services first so backend host resolution succeeds):
 ```bash
-docker run --rm \
-    -v /opt/intranet-assistant/deploy/nginx.conf:/etc/nginx/nginx.conf:ro \
-    -v /opt/intranet-assistant/deploy/certs:/etc/nginx/certs:ro \
-    nginx:1.27.2-alpine nginx -t
+cd /opt/intranet-assistant/deploy
+
+# Start upstream services first so DNS can resolve 'app' on internal_app network
+docker compose -p intranet-assistant --env-file .env.staging -f docker-compose.yml up -d app llm-service
+
+# Validate proxy configuration within the Compose service definition
+docker compose -p intranet-assistant --env-file .env.staging -f docker-compose.yml run --rm --no-deps reverse-proxy nginx -t
+
+status=$?
+echo "nginx -t exit code: $status"
+test "$status" -eq 0
 ```
-*Expected Result: `syntax is ok` and `test is successful`.*
+*Expected Result: `nginx: the configuration file /etc/nginx/nginx.conf syntax is ok` and `nginx: configuration file /etc/nginx/nginx.conf test is successful` with exit code 0.*
+*Note: Until this exact sequence is run and its output captured on the staging host, Nginx runtime validation remains UNVERIFIED.*
+
+### Step 3.5: Provision Inference Model Artifacts & Verify Volume Mount
+vLLM `v0.6.3` requires a standard Hugging Face Safetensors model directory (not an opaque Ollama blob or GGUF file without separate HF tokenizers).
+
+> [!IMPORTANT]
+> **Model Licensing & Checkpoint Selection**:
+> - **Default Staging Model**: `Qwen/Qwen2.5-1.5B-Instruct` (pinned revision `989aa7980e4cf806f80c7fef2b1adb7bc71aa306`), officially licensed under **Apache 2.0**. It is fully approved for commercial enterprise staging and production without special licensing grants.
+> - **Alternative Research Checkpoint (`3B`)**: `Qwen/Qwen2.5-3B-Instruct` is under the **Qwen Research License Agreement (`qwen-research`)**, which is restricted to non-commercial academic research. It is **prohibited for commercial production staging** unless an explicit commercial license grant is obtained from Alibaba Cloud.
+> - Staging procedures below strictly provision the license-cleared `qwen2.5:1.5b` checkpoint.
+
+1. **Air-Gapped Artifact Sourcing & Transfer Procedure**:
+   In strict air-gapped staging, runtime internet access is prohibited. **Do not execute `huggingface-cli download` directly on the staging host.** Model artifacts must be staged via an approved connected workstation and transferred across the secure boundary:
+   * **On Connected Build Workstation**:
+     ```bash
+     # Download approved Apache-2.0 checkpoint at pinned revision
+     huggingface-cli download Qwen/Qwen2.5-1.5B-Instruct \
+       --revision 989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
+       --local-dir /tmp/qwen2.5-1.5b-staging
+     cd /tmp/qwen2.5-1.5b-staging
+
+     # Step A: Verify upstream model integrity against pinned Hugging Face Git LFS hash
+     echo "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee  model.safetensors" | sha256sum -c - || { echo "CRITICAL: Upstream LFS SHA256 mismatch!"; exit 1; }
+
+     # Step B: Generate transfer integrity manifest covering all required regular files (excluding manifest itself)
+     rm -f model_weights.sha256
+     sha256sum \
+       config.json \
+       generation_config.json \
+       merges.txt \
+       model.safetensors \
+       tokenizer.json \
+       tokenizer_config.json \
+       vocab.json \
+       LICENSE \
+       README.md > model_weights.sha256 || { echo "CRITICAL: Checksum generation failed!"; exit 1; }
+
+     # Step C: Package archive containing all model files and the transfer manifest
+     tar -czvf qwen2.5-1.5b-artifacts.tar.gz \
+       config.json generation_config.json merges.txt model.safetensors \
+       tokenizer.json tokenizer_config.json vocab.json LICENSE README.md model_weights.sha256
+     ```
+   * **Authorized Media / Bastion Transfer**:
+     Transfer `qwen2.5-1.5b-artifacts.tar.gz` and `model_weights.sha256` to the air-gapped staging host via the authorized corporate bastion transfer protocol.
+   * **On Staging Host Extraction**:
+     ```bash
+     sudo mkdir -p /opt/intranet-assistant/deploy/models/qwen2.5:1.5b
+     sudo tar -xzvf /staging/artifacts/qwen2.5-1.5b-artifacts.tar.gz -C /opt/intranet-assistant/deploy/models/qwen2.5:1.5b/
+     cd /opt/intranet-assistant/deploy/models/qwen2.5:1.5b
+     # Verify transfer integrity manifest
+     sha256sum -c model_weights.sha256 || { echo "CRITICAL: Staging transfer checksum verification failed!"; exit 1; }
+     ```
+2. **Verify Required Files & Permissions**:
+   Confirm that the destination directory contains the full model definition and tokenizer:
+   ```bash
+   ls -la /opt/intranet-assistant/deploy/models/qwen2.5:1.5b/
+   # Required files: config.json, generation_config.json, tokenizer.json,
+   # tokenizer_config.json, vocab.json, merges.txt, model.safetensors
+   ```
+3. **Volume Path Resolution & Common Trap**:
+   In `deploy/docker-compose.yml`, the volume mapping is defined as:
+   ```yaml
+   volumes:
+     - ${INTERNAL_MODEL_PATH:-./models}:/models:ro
+   ```
+   Because relative paths in Docker Compose resolve relative to the directory containing `docker-compose.yml` (`/opt/intranet-assistant/deploy`), the default `./models` resolves to `/opt/intranet-assistant/deploy/models`.
+   **Resolution Pitfall**: If an operator sets `INTERNAL_MODEL_PATH=./deploy/models` (assuming the path is relative to the repository root), Docker Compose evaluates `./deploy/models` relative to `/opt/intranet-assistant/deploy`, creating an invalid nested bind mount: `/opt/intranet-assistant/deploy/deploy/models`.
+   To avoid this, leave `INTERNAL_MODEL_PATH` unset (relying on default `./models`), or set `INTERNAL_MODEL_PATH=./models` or the absolute path `/opt/intranet-assistant/deploy/models`.
+   Verify the resolved bind mount:
+   ```bash
+   docker compose -p intranet-assistant --env-file .env.staging -f docker-compose.yml config | grep -A 2 -B 1 "target: /models"
+   ```
+   *Expected Result: `source: /opt/intranet-assistant/deploy/models` (confirming it points directly to the intended directory and NOT a nested `deploy/deploy/models`).*
+
+   > [!IMPORTANT]
+   > Model loading cannot be claimed as verified until the containerized vLLM engine actually launches, allocates GPU weights into VRAM, and completes a live chat-completion request.
 
 ### Step 4: Start Staging Stack (No-Build & Pull-Never Policy)
 Launch the stack using pre-loaded images, preventing unintended internet builds or pulls:
@@ -220,6 +306,20 @@ Query the application internal healthcheck using the internal CA:
 curl --cacert /etc/ssl/certs/internal-ca.pem https://intranet-staging.company.internal/health/ready
 ```
 *Expected Result: `{"status":"ready","request_id":"..."}`.*
+
+### Step 5.5: Validate Inference Model Alias & Live Endpoint
+The vLLM server is configured with `--served-model-name qwen2.5:1.5b` to match the application's `LLM_MODEL=qwen2.5:1.5b`.
+1. Query the internal vLLM model catalog from within the isolated backend network:
+```bash
+docker compose -p intranet-assistant --env-file .env.staging -f docker-compose.yml exec -T app curl -s http://llm-service:8000/v1/models
+```
+*Expected Result: JSON payload containing `"id": "qwen2.5:1.5b"` (verifying that the alias matches without path prefix).*
+
+2. Send a test chat completion request using the exact application identifier:
+```bash
+docker compose -p intranet-assistant --env-file .env.staging -f docker-compose.yml exec -T app curl -s http://llm-service:8000/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"qwen2.5:1.5b","messages":[{"role":"user","content":"Ping"}]}'
+```
+*Expected Result: Valid JSON response with choices array. Do not claim the model identifier mismatch is resolved until a real inference request succeeds on the staging engine.*
 
 ### Step 6: Inspect Startup Logs
 Verify no secret values appear in logs:
@@ -854,8 +954,9 @@ If corporate security policy mandates Single Sign-On (SSO) and Multi-Factor Auth
 
 | Verification Gate | Classification | Execution Status | Staging Host Requirement |
 | :--- | :--- | :---: | :--- |
-| **Full Pytest Regression Suite (144 tests)** | Code-Level | **PASSED** *(Windows Python 3.12)* | Passed in `.venv` (unit, integration, security, PBKDF2/Argon2, RBAC, session revocation, rollback, approver configuration integrity). |
-| **Focused Privileged Provisioning & Audit Suite (35 tests)** | Security | **PASSED** *(Windows Python 3.12)* | Passed in `tests/security/test_staging_provisioning_and_rollback.py` (approver authorization, anti-self-approval, atomic rollback, audit metadata linking, configuration integrity). |
+| **Full Pytest Regression Suite (154 tests)** | Code-Level | **PASSED** *(Windows Python 3.12)* | Passed in `.venv` (unit, integration, security, PBKDF2/Argon2, RBAC, session revocation, rollback, approver configuration integrity, async queue admission, compose volume path resolution, worker count & model alias consistency). |
+| **50–100 Employee Capacity Benchmark (`scripts/benchmark_e2e_workload.py`)** | Performance | **50 USERS: SHORT-TEST PASS (SOAK REQUIRED) / 100 USERS: FAILS TARGET** | Measured against native Ollama `qwen2.5:3b` on NVIDIA RTX 2050. 50 users achieved non-LLM p95 232.6ms (short-test pass; sustained staging soak still required). 100 users fails performance target (p95 > 2.0s). Native Ollama results are strictly kept separate from containerized vLLM, and workers/concurrency are not added to mask the failure. |
+| **Focused Privileged Provisioning & Audit Suite (37 tests)** | Security | **PASSED** *(Windows Python 3.12)* | Passed in `tests/security/test_staging_provisioning_and_rollback.py` (approver authorization, anti-self-approval, atomic rollback, audit metadata linking, configuration integrity, compose volume resolution, worker count & model alias consistency). |
 | **Isolated Production Smoke Test** | Code-Level | **PASSED** *(Windows Python 3.12)* | Passed via `deploy/production_smoke_test.py` against disposable database. |
 | **API & Session-Flow E2E Verification** | API/Session | **PASSED** *(Windows Python 3.12)* | Tested via `verify_browser_flow_e2e.py` (cookie jars, CSRF tokens, citation filtering). |
 | **YAML Specification Syntax** | Static Analysis | **PASSED** | Parsed and verified via PyYAML. |
@@ -871,7 +972,7 @@ If corporate security policy mandates Single Sign-On (SSO) and Multi-Factor Auth
 
 - **Deployment Status**: **CONDITIONAL GO**
 - **Disposition Rationale**:
-  - **Passed (Code-Level Assurance)**: Privileged administrator provisioning assurance controls, independent approver authenticity checks (`AUTHORIZED_CHANGE_APPROVERS`), two-person rule enforcement (anti-self-approval), structured audit metadata linking (ticket, target_system, approval_ref, operator, independent_approver), atomic SQLite transaction rollback on audit failure, approver configuration integrity enforcement (fail-closed loading without silent fallbacks, POSIX file permissions and symlink validation), and all 144 local regression and security tests pass on Windows.
+  - **Passed (Code-Level & Performance Assurance)**: Privileged administrator provisioning assurance controls, independent approver authenticity checks (`AUTHORIZED_CHANGE_APPROVERS`), two-person rule enforcement (anti-self-approval), structured audit metadata linking (ticket, target_system, approval_ref, operator, independent_approver), atomic SQLite transaction rollback on audit failure, approver configuration integrity enforcement (fail-closed loading without silent fallbacks, POSIX file permissions and symlink validation), all 154 local regression, security, and queue tests pass on Windows, and empirical 50 concurrent active employee workload achieves short-test pass on native Ollama (with staging soak required; 100 users fails performance target). Native Ollama results are not transferred to containerized vLLM.
   - **Conditional Hold**: Release to production remains strictly gated at **CONDITIONAL GO** pending execution and signoff of the seven mandatory live staging gates on the Linux staging host:
     1. **HTTP 80 to HTTPS 443 redirect**: Live verification of 301 Moved Permanently redirect on reverse proxy port 80.
     2. **TLS 1.3 handshake and internal CA trust**: Real OpenSSL handshake and certificate chain trust against internal corporate CA.

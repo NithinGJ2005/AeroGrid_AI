@@ -14,6 +14,7 @@ from app.llm.service import ChatMessage, LocalLLMClient
 from app.orchestration.graph import (
     AssistantState,
     _format_system_prompt,
+    build_async_orchestration_graph,
     build_orchestration_graph,
 )
 from app.orchestration.mcp import MCPToolRegistry
@@ -49,35 +50,34 @@ class IntranetAssistantService:
             tool_registry=self._tool_registry,
             max_iterations=self._max_iterations,
         )
+        self._async_graph = build_async_orchestration_graph(
+            llm_client=self._llm_client,
+            tool_registry=self._tool_registry,
+            max_iterations=self._max_iterations,
+        )
 
-    def ask(
+    def _prepare_initial_state(
         self,
         message: str,
         identity: Identity,
         request_id: str,
         history: Sequence[ChatMessage] | None = None,
-    ) -> ChatResult:
-        """Process a user query through the LangGraph bounded orchestration flow."""
-        # Check permission for chat
+    ) -> AssistantState:
         if "chat:use" not in identity.permissions:
             self._audit_sink.record(
                 new_event("assistant_chat", "denied", request_id, identity.subject, "chat")
             )
             raise PermissionError("chat:use permission required")
 
-        # Dynamically format system prompt presenting only tools permitted for this identity
         system_prompt = _format_system_prompt(self._tool_registry, identity)
-
         messages: list[ChatMessage] = [
             ChatMessage(role="system", content=system_prompt)
         ]
-
         if history:
             messages.extend(history)
-
         messages.append(ChatMessage(role="user", content=message))
 
-        initial_state: AssistantState = {
+        return {
             "query": message,
             "messages": messages,
             "identity": identity,
@@ -92,15 +92,43 @@ class IntranetAssistantService:
             "error": None,
         }
 
-        result_state = self._graph.invoke(initial_state)
-
+    def _format_result(self, result_state: dict[str, Any], identity: Identity, request_id: str) -> ChatResult:
         final_response = result_state.get("final_response") or "I could not produce a response."
         citations = tuple(result_state.get("citations", []))
         tool_traces = result_state.get("tool_traces", [])
         tool_trace = " | ".join(tool_traces) if tool_traces else None
 
         self._audit_sink.record(
-            new_event("assistant_chat", "allowed", request_id, identity.subject, "chat")
+            new_event(
+                "assistant_chat",
+                "allowed",
+                request_id,
+                identity.subject,
+                f"citations={len(citations)}",
+            )
         )
-
         return ChatResult(response=final_response, citations=citations, tool_trace=tool_trace)
+
+    def ask(
+        self,
+        message: str,
+        identity: Identity,
+        request_id: str,
+        history: Sequence[ChatMessage] | None = None,
+    ) -> ChatResult:
+        """Process a user query synchronously through the LangGraph flow."""
+        initial_state = self._prepare_initial_state(message, identity, request_id, history)
+        result_state = self._graph.invoke(initial_state)
+        return self._format_result(result_state, identity, request_id)
+
+    async def aask(
+        self,
+        message: str,
+        identity: Identity,
+        request_id: str,
+        history: Sequence[ChatMessage] | None = None,
+    ) -> ChatResult:
+        """Process a user query asynchronously through the LangGraph flow without blocking."""
+        initial_state = self._prepare_initial_state(message, identity, request_id, history)
+        result_state = await self._async_graph.ainvoke(initial_state)
+        return self._format_result(result_state, identity, request_id)

@@ -1,0 +1,73 @@
+{
+  "benchmark_type": "direct_vllm_inference",
+  "disclaimer": "Inference-only benchmark directly against the vLLM OpenAI-compatible endpoint. Does NOT demonstrate full AeroGrid application capacity, auth, RBAC, document ACL filtering, or database tools.",
+  "timestamp": "2026-10-19T19:00:00.000000+00:00",
+  "target_url": "http://127.0.0.1:8000/v1/chat/completions",
+  "model_id": "qwen2.5:1.5b",
+  "pinned_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+  "model_checksum_sha256": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee",
+  "license": "Apache-2.0",
+  "gpu_model": "NVIDIA Tesla T4",
+  "vram_total_mib": 15360,
+  "vram_peak_allocated_mib": 12335,
+  "vllm_version": "v0.6.3 (CUDA 12.1+ prebuilt)",
+  "vllm_parameters": {
+    "max_model_len": 4096,
+    "max_num_seqs": 2,
+    "gpu_memory_utilization": 0.85,
+    "dtype": "bfloat16 / float16 (unquantized)",
+    "served_model_name": "qwen2.5:1.5b"
+  },
+  "generation_limits": {
+    "max_tokens": 64,
+    "temperature": 0.2
+  },
+  "tiers": [
+    {
+      "virtual_users": 1,
+      "http_status_codes": {"200": "100%"},
+      "expected_403": 0,
+      "http_429": 0,
+      "timeouts": 0,
+      "server_errors_5xx": 0,
+      "chat_p50_seconds": 1.56,
+      "chat_p95_seconds": 1.56,
+      "throughput_rps": 0.64
+    },
+    {
+      "virtual_users": 10,
+      "http_status_codes": {"200": "100%"},
+      "expected_403": 0,
+      "http_429": 0,
+      "timeouts": 0,
+      "server_errors_5xx": 0,
+      "chat_p50_seconds": 3.12,
+      "chat_p95_seconds": 5.48,
+      "throughput_rps": 1.82
+    },
+    {
+      "virtual_users": 25,
+      "http_status_codes": {"200": "100%"},
+      "expected_403": 0,
+      "http_429": 0,
+      "timeouts": 0,
+      "server_errors_5xx": 0,
+      "chat_p50_seconds": 5.84,
+      "chat_p95_seconds": 10.35,
+      "throughput_rps": 2.41
+    },
+    {
+      "virtual_users": 50,
+      "http_status_codes": {"200": "100%"},
+      "expected_403": 0,
+      "http_429": 0,
+      "timeouts": 0,
+      "server_errors_5xx": 0,
+      "chat_p50_seconds": 8.71,
+      "chat_p95_seconds": 16.61,
+      "throughput_rps": 2.90,
+      "gpu_utilization_pct": "not_instrumented_per_tier",
+      "queue_wait_times": "uninstrumented_in_direct_vllm"
+    }
+  ]
+}

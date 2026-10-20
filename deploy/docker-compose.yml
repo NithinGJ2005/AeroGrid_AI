@@ -30,11 +30,13 @@ services:
       dockerfile: deploy/Dockerfile
     container_name: intranet-assistant-app
     restart: unless-stopped
+    command: ["--workers", "${WEB_CONCURRENCY:-2}"]
     environment:
       - APP_ENV=production
       - DEBUG=false
       - HOST=0.0.0.0
       - PORT=8000
+      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-2}
       - SECRET_KEY=${SECRET_KEY}
       - ENABLE_DEVELOPMENT_AUTH=false
       - AUTH_MODE=${AUTH_MODE:-local}
@@ -51,7 +53,7 @@ services:
       - LLM_ENABLED=true
       - LLM_BASE_URL=http://llm-service:8000/v1
       - LLM_ALLOWED_HOSTS=["llm-service"]
-      - LLM_MODEL=${LLM_MODEL:-qwen3-4b-reviewed}
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:1.5b}
       - LLM_INTERNAL_ONLY=true
       - DOCUMENT_ROOTS=["/data/documents"]
       - APPROVERS_CONFIG_FILE=/etc/intranet-assistant/authorized_approvers.json
@@ -82,10 +84,12 @@ services:
     container_name: intranet-llm-service
     restart: unless-stopped
     command: >
-      --model /models/approved-model
+      --model /models/${LLM_MODEL:-qwen2.5:1.5b}
+      --served-model-name ${LLM_MODEL:-qwen2.5:1.5b}
       --host 0.0.0.0
       --port 8000
       --max-model-len 4096
+      --max-num-seqs 2
       --disable-log-requests
     volumes:
       - ${INTERNAL_MODEL_PATH:-./models}:/models:ro
