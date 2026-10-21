@@ -17,16 +17,19 @@
     {
       "virtual_users": 50,
       "mode": "mixed",
-      "duration_seconds": 30.0,
+      "test_description": "30-second workload submission test with 56.8 seconds total wall-clock duration including worker and in-flight GPU drain",
+      "workload_submission_window_seconds": 30.0,
+      "duration_seconds": 56.8,
       "total_requests": 869,
       "successful_requests": 692,
       "intentional_denials": 141,
       "rejected_requests": 35,
       "service_unavailable": 0,
       "server_errors": 0,
-      "timeouts": 0,
-      "failed_requests": 0,
+      "timeouts": 1,
+      "failed_requests": 1,
       "status_codes": {
+        "0": 1,
         "200": 692,
         "403": 141,
         "429": 35
@@ -42,8 +45,9 @@
       "peak_gpu_util": 96.0,
       "criteria_passed": true,
       "criteria_notes": [
-        "50-employee mixed workload sustained soak target (<2.0s non-LLM p95) PASSED",
-        "Overload requests beyond 12 connection capacity ceiling cleanly rejected with HTTP 429"
+        "50-employee mixed workload test (30s submission window, 56.8s total wall-clock drain): non-LLM p95 latency (<2.0s SLA) PASSED at 171.5ms",
+        "Overload requests beyond 12 connection capacity ceiling cleanly rejected with HTTP 429 (35 rejected)",
+        "1 client-side connection timeout occurred during worker queue drain (status code 0; requests are not all successful)"
       ]
     }
   ]

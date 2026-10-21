@@ -21,6 +21,7 @@ import os
 import random
 import statistics
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -28,24 +29,55 @@ from typing import Any
 
 import httpx
 
-DEFAULT_USER_PASS = os.environ.get("AEROGRID_USER_PASSWORD")
-DEFAULT_ADMIN_PASS = os.environ.get("AEROGRID_ADMIN_PASSWORD", "AdminSecurity2026!")
+def get_benchmark_users(
+    is_staging: bool = False, admin_pass: str | None = None
+) -> list[tuple[str, str]]:
+    """Resolve synthetic benchmark users and passwords.
 
-DEMO_USERS = (
-    [
-        ("staff.engineer", DEFAULT_USER_PASS or "StagingSecured2026!Run"),
-        ("hr.partner", DEFAULT_USER_PASS or "StagingSecured2026!Run"),
-        ("corp.admin", DEFAULT_ADMIN_PASS or "StagingSecured2026!Run"),
+    Hard-coded fallback credentials and default passwords are strictly prohibited.
+    Explicit environment variables AEROGRID_USER_PASSWORD and AEROGRID_ADMIN_PASSWORD
+    (or CLI argument --admin-pass) must be provided.
+    """
+    user_pass = os.environ.get("AEROGRID_USER_PASSWORD")
+    if not user_pass or not user_pass.strip():
+        raise ValueError(
+            "AEROGRID_USER_PASSWORD environment variable must be explicitly provided for benchmark accounts."
+        )
+
+    admin_password = admin_pass or os.environ.get("AEROGRID_ADMIN_PASSWORD")
+    if not admin_password or not admin_password.strip():
+        raise ValueError(
+            "AEROGRID_ADMIN_PASSWORD environment variable (or --admin-pass) must be explicitly provided for benchmark accounts."
+        )
+
+    if is_staging:
+        return [
+            ("staff.engineer", user_pass),
+            ("hr.partner", user_pass),
+            ("corp.admin", admin_password),
+        ]
+
+    return [
+        ("alice.chen", user_pass),
+        ("bob.smith", user_pass),
+        ("david.miller", user_pass),
+        ("emma.watson", user_pass),
+        ("admin.system", admin_password),
     ]
-    if os.environ.get("AEROGRID_STAGING_USERS") or os.environ.get("AEROGRID_ADMIN_USER") == "corp.admin"
-    else [
-        ("alice.chen", DEFAULT_USER_PASS or "EngineeringLead2026!"),
-        ("bob.smith", DEFAULT_USER_PASS or "StaffEngineer2026!"),
-        ("david.miller", DEFAULT_USER_PASS or "HRPartner2026!"),
-        ("emma.watson", DEFAULT_USER_PASS or "FinanceAnalyst2026!"),
-        ("admin.system", DEFAULT_ADMIN_PASS),
-    ]
-)
+
+
+def get_default_users() -> list[tuple[str, str]]:
+    is_staging = bool(
+        os.environ.get("AEROGRID_STAGING_USERS")
+        or os.environ.get("AEROGRID_ADMIN_USER") == "corp.admin"
+    )
+    return get_benchmark_users(is_staging=is_staging)
+
+
+def __getattr__(name: str) -> Any:
+    if name == "DEMO_USERS":
+        return get_default_users()
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 CHAT_QUESTIONS = [
     "What is the standard procedure for password rotations?",
@@ -78,6 +110,7 @@ class TierResult:
     virtual_users: int
     mode: str
     duration_seconds: float
+    workload_submission_window_seconds: float = 0.0
     total_requests: int = 0
     successful_requests: int = 0
     intentional_denials: int = 0  # 403 (intentional RBAC authorization enforcement)
@@ -270,15 +303,22 @@ async def run_tier(
     duration: float,
     mode: str,
     admin_token: str,
+    users: list[tuple[str, str]] | None = None,
 ) -> TierResult:
     """Run a single test tier (e.g. 10, 50, 100 users)."""
-    result = TierResult(virtual_users=num_users, mode=mode, duration_seconds=duration)
+    result = TierResult(
+        virtual_users=num_users,
+        mode=mode,
+        duration_seconds=duration,
+        workload_submission_window_seconds=duration,
+    )
+    active_users = users if users is not None else get_default_users()
 
     # 1. Obtain user tokens for synthetic employees
     user_tokens: list[str] = []
     async with httpx.AsyncClient(timeout=10.0) as client:
         for i in range(num_users):
-            username, pwd = DEMO_USERS[i % len(DEMO_USERS)]
+            username, pwd = active_users[i % len(active_users)]
             tok = await authenticate_user(client, base_url, username, pwd)
             if not tok:
                 tok = admin_token
@@ -442,9 +482,24 @@ async def main():
     parser.add_argument("--duration", type=float, default=15.0, help="Duration in seconds per mixed tier")
     parser.add_argument("--skip-burst", action="store_true", help="Skip independent burst test")
     parser.add_argument("--json-out", "--output", dest="json_out", default=None, help="Save report to JSON file")
+    parser.add_argument("--staging", action="store_true", help="Use staging accounts (requires explicit AEROGRID_USER_PASSWORD and AEROGRID_ADMIN_PASSWORD in environment)")
     parser.add_argument("--admin-user", default=os.environ.get("AEROGRID_ADMIN_USER", "admin.system"), help="Admin username for metrics collection")
-    parser.add_argument("--admin-pass", default=DEFAULT_ADMIN_PASS, help="Admin password for metrics collection")
+    parser.add_argument("--admin-pass", default=None, help="Admin password for metrics collection")
     args = parser.parse_args()
+
+    is_staging = (
+        args.staging
+        or bool(os.environ.get("AEROGRID_STAGING_USERS"))
+        or args.admin_user == "corp.admin"
+        or os.environ.get("AEROGRID_ADMIN_USER") == "corp.admin"
+    )
+    admin_pass = args.admin_pass or os.environ.get("AEROGRID_ADMIN_PASSWORD")
+
+    try:
+        benchmark_users = get_benchmark_users(is_staging=is_staging, admin_pass=admin_pass)
+    except ValueError as e:
+        print(f"CONFIGURATION ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
     parsed_users = _parse_int_sequence(args.users)
     user_levels = parsed_users if parsed_users else [1, 10, 25, 50, 75, 100]
@@ -455,6 +510,7 @@ async def main():
     print("           AEROGRID AI — PRODUCTION READINESS CAPACITY BENCHMARK                ")
     print("================================================================================")
     print(f"Target URL:        {args.base_url}")
+    print(f"Staging Mode:      {is_staging}")
     print(f"User Tiers:        {user_levels}")
     print(f"Tier Duration:     {args.duration}s")
     print(f"Burst Levels:      {burst_users if not args.skip_burst else 'SKIPPED'}")
@@ -470,7 +526,7 @@ async def main():
             if h.status_code != 200:
                 print(f"ERROR: Server not ready at {args.base_url}: {h.text}")
                 return
-            admin_token = await authenticate_user(client, args.base_url, args.admin_user, args.admin_pass)
+            admin_token = await authenticate_user(client, args.base_url, args.admin_user, admin_pass or "")
             if not admin_token:
                 print("ERROR: Failed to authenticate admin user.")
                 return
@@ -496,7 +552,7 @@ async def main():
 
     for u in user_levels:
         print(f"Running Tier: {u} Concurrent Employees ({args.duration}s)...", end="", flush=True)
-        res = await run_tier(args.base_url, u, args.duration, "mixed", admin_token)
+        res = await run_tier(args.base_url, u, args.duration, "mixed", admin_token, users=benchmark_users)
         results.append(res)
         print(" DONE")
         print(f"   Reqs: {res.total_requests} | Throughput: {res.throughput_rps:.1f} rps | Non-LLM p95: {res.non_llm_p95_ms}ms | Chat p50: {res.chat_p50_ms}ms")
@@ -512,7 +568,7 @@ async def main():
         print("Simulating simultaneous AI questions from burst user tiers.\n")
         for u in burst_users:
             print(f"Running Chat Burst: {u} Simultaneous Questions...", end="", flush=True)
-            b_res = await run_tier(args.base_url, u, 0, "burst", admin_token)
+            b_res = await run_tier(args.base_url, u, 0, "burst", admin_token, users=benchmark_users)
             burst_results.append(b_res)
             print(" DONE")
             print(f"   Chat Completed: {b_res.chat_completed} | Chat Overload 429: {b_res.chat_rejected} | Failed: {b_res.failed_requests}")

@@ -88,12 +88,28 @@ def run_e2e_tests():
     )
     check("Demo account credentials rejected with HTTP 401", r_demo.status_code == 401)
 
+    # Rejection of revoked staging credential
+    revoked_password = os.environ.get("AEROGRID_REVOKED_PASSWORD")
+    if not revoked_password or not revoked_password.strip():
+        raise ValueError("AEROGRID_REVOKED_PASSWORD must be explicitly provided in environment to verify revocation rejection.")
+
+    r_old_exposed = session.post(
+        f"{HTTPS_BASE}/api/v1/auth/login",
+        headers=HEADERS_BASE,
+        json={"username": "staff.engineer", "password": revoked_password},
+        timeout=5,
+    )
+    check("Revoked staging credential rejected with HTTP 401", r_old_exposed.status_code == 401)
+
     # Genuine login: Staff Engineer
-    test_password = os.environ.get("STAGING_TEST_PW", "StagingSecured2026!Run")
+    user_password = os.environ.get("AEROGRID_USER_PASSWORD") or os.environ.get("STAGING_TEST_PW")
+    if not user_password or not user_password.strip():
+        raise ValueError("AEROGRID_USER_PASSWORD or STAGING_TEST_PW must be explicitly provided in environment.")
+
     r_eng_login = session.post(
         f"{HTTPS_BASE}/api/v1/auth/login",
         headers=HEADERS_BASE,
-        json={"username": "staff.engineer", "password": test_password},
+        json={"username": "staff.engineer", "password": user_password},
         timeout=10,
     )
     check("Genuine staff.engineer login returns HTTP 200", r_eng_login.status_code == 200)
@@ -143,10 +159,14 @@ def run_e2e_tests():
     # 3c. Verify Admin privileges for Corporate Administrator
     admin_session = requests.Session()
     admin_session.verify = CERT_PATH
+    admin_password = os.environ.get("AEROGRID_ADMIN_PASSWORD") or os.environ.get("STAGING_TEST_PW")
+    if not admin_password or not admin_password.strip():
+        raise ValueError("AEROGRID_ADMIN_PASSWORD or STAGING_TEST_PW must be explicitly provided in environment.")
+
     r_admin_login = admin_session.post(
         f"{HTTPS_BASE}/api/v1/auth/login",
         headers=HEADERS_BASE,
-        json={"username": "corp.admin", "password": test_password},
+        json={"username": "corp.admin", "password": admin_password},
         timeout=10,
     )
     check("Admin corp.admin login returns HTTP 200", r_admin_login.status_code == 200)

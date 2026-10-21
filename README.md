@@ -41,7 +41,7 @@ The backend is configured to use an internally hosted, OpenAI-compatible inferen
 | **Private deployment path** | Docker Compose, Nginx, internal networking, offline staging scripts, and operational runbooks. |
 
 > [!IMPORTANT]
-> Implemented code paths are not the same as production validation. A production rollout still depends on organization-specific identity configuration, an approved database and read-only credentials, real document ACLs, internal TLS certificates, approved model artifacts, trusted image manifests, and successful live staging checks. See the [staging runbook](docs/STAGING_RUNBOOK.md) for the current verification status.
+> Implemented code paths are not the same as production validation. The local staging configuration has passed reported live checks for Nginx HTTPS termination, HTTP-to-HTTPS redirect, session authentication, server-side RBAC, edge rate limiting, interactive Next.js frontend proxy integration, and real local model inference (bridged to host Ollama `qwen2.5:3b`). However, this bridged setup is distinct from the planned fully containerized, air-gapped vLLM deployment, corporate OIDC/SSO integration is cryptographically simulated rather than live-federated, and full production rollout still depends on organization-approved databases, document ACLs, and production sign-off. See the [staging runbook](docs/STAGING_RUNBOOK.md) for the current verification status.
 
 ## Architecture
 
@@ -146,7 +146,7 @@ Security is enforced by the API and tool services, not by frontend state or mode
 
 | Control | Design described in the repository |
 | --- | --- |
-| **Authentication** | Configurable local/OIDC modes. OIDC token verification supports RS256/ES256 and requires organization-provided issuer/JWKS details. |
+| **Authentication** | Configurable local/OIDC modes. OIDC token verification supports RS256/ES256 and requires organization-provided issuer/JWKS details; cryptographic OIDC validation is simulated and passed in automated tests, while connection to a live corporate IdP and MFA remains unverified. |
 | **Authorization** | Server-side `ROLE_PERMISSION_MAP`, deny-by-default behavior, and permission checks on protected endpoints and tools. |
 | **Document ACLs** | Verified caller roles are checked against administrator-managed file ACLs before retrieval results reach the model. |
 | **Database safety** | Reviewed catalog queries, parameter binding, result caps, and timeout controls. Production requires a least-privileged read-only database account. |
@@ -267,11 +267,23 @@ The production database engine/driver and exact local model must be selected and
    - OpenAPI docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) (when enabled by configuration)
 
 5. **Run the modular frontend (optional):**
+
+   *Development mode:*
    ```bash
    cd frontend/enterprise-intranet-ai-assistant1
    pnpm install
    pnpm dev
    ```
+
+   *Production build against containerized staging backend:*
+   ```powershell
+   cd frontend/enterprise-intranet-ai-assistant1
+   npm install
+   npm run build
+   $env:NODE_EXTRA_CA_CERTS = "D:\MultiAgent\deploy\certs\server.crt"
+   .\node_modules\.bin\next.cmd start -p 3000
+   ```
+   > The production Next.js configuration proxies `/api/v1/:path*` to the Nginx TLS port (`https://127.0.0.1:443`). `NODE_EXTRA_CA_CERTS` is required so the Node.js reverse-proxy runtime trusts the internal staging CA certificate without disabling TLS validation.
 
 ## API overview
 
@@ -367,7 +379,7 @@ flowchart TD
 
 ### Production readiness checklist
 
-- [ ] Configure corporate OIDC/SSO parameters, audience, role/group claims, and server-side permission map if required.
+- [ ] Connect and federate with a live corporate OIDC/SAML IdP and MFA (OIDC token validation and RBAC mapping are verified via cryptographic simulation in `tests/security/test_oidc_simulation.py`, but live provider integration remains unverified).
 - [ ] Configure the actual database driver, read-only credentials, reviewed query catalog, and native timeout policy.
 - [ ] Provide approved document roots and administrator-managed ACL files.
 - [ ] Approve the local model revision/license and provide scanned weights and tokenizer files.
@@ -408,17 +420,23 @@ Run the realistic end-to-end multi-tier employee workload benchmark (real model 
 python scripts/benchmark_e2e_workload.py --tiers 1 10 25 50 75 100 --burst-levels 10 50 100 --output benchmark_production_results.json
 ```
 
-The repository test suite consists of **154 automated tests passing on Windows/Python 3.12** across unit, integration, security, RBAC authorization, and bounded async queue admission.
+The repository test suite consists of **172 automated tests passing on Windows** (`python -m pytest`) across unit, integration, security, RBAC authorization, simulated OIDC single sign-on, benchmark credential validation, and bounded async queue admission.
 
 ### Concurrency and capacity status
-- **50 Concurrent Active Employees**: **Short-test pass** for portal API latency target: non-LLM p95 **232.6 ms** (1-worker baseline, `benchmark_production_results.json`) and **152.6 ms** (2-worker candidate, `benchmark_results_50users_2workers.json`), non-LLM p99 **268.1 ms** (1-worker) and **192.2 ms** (2-worker), both well under the $\le 1,000$ ms and $\le 2,000$ ms SLA targets. Measured against native local Ollama `qwen2.5:3b` on NVIDIA GeForce RTX 2050 (4GB VRAM, 8GB host RAM). Zero crashes, zero 500 errors, with controlled HTTP 429 overload shedding during queue saturation. **Note**: A sustained 2–4 hour staging soak test is still required before full production sign-off.
+- **50 Concurrent Active Employees (30s Workload Submission / 56.8s Total Wall-Clock Drain)**: **Passed** for portal API latency targets against the live containerized staging stack (`https://127.0.0.1`) bridged to resident host Ollama `qwen2.5:3b` on an NVIDIA GeForce RTX 2050 (4GB VRAM, 8GB host RAM), recorded in [`benchmark_results_staging_50user.json`](benchmark_results_staging_50user.json):
+  - **Execution Window**: 30-second active workload submission test, with 56.8 seconds total wall-clock duration including worker and in-flight GPU generation drain.
+  - **Request Volume & Status Breakdown**: 869 total requests across all status categories — 692 successful (`200 OK`), 141 intentional RBAC denials (`403 Forbidden`), 35 admission-shed rejections (`429 Too Many Requests`), and 1 connection timeout during teardown drain (`status_code: 0`). Requests are not all described as successful: 1 client timeout occurred alongside 35 rate-limit rejections.
+  - **Reported Throughput**: **15.3 req/s**. Note on measurement interval: throughput is calculated across the full execution span (56.8s total duration from the launch of the first request through the drain and completion of the final queued in-flight generation: $869 / 56.8\text{s} \approx 15.3\text{ req/s}$), rather than the 30-second workload submission window alone.
+  - **Latency**: Non-LLM p95 **171.5 ms** (non-LLM p50: 17.5 ms, p99: 201.2 ms), well within the $\le 1,000$ ms and $\le 2,000$ ms SLA targets.
+  - **Inference Stability & Errors**: 16 chat completions succeeded, 35 excess chat requests were cleanly shed with HTTP 429 during queue saturation, 0 server errors (`5xx`), and 1 client-side connection timeout (`status_code: 0`) during teardown drain.
+  - **Production Qualification Status**: While this 30-second workload submission test verifies short-window queue stability, bounded concurrency enforcement, and admission limits, a long-duration 2–4 hour staging soak test remains pending for final production certification.
 - **75 to 100 Concurrent Active Employees**:
   - **Local 100-User Benchmark**: **FAILED** against the 1,000 ms non-LLM p95 target for the measured run (non-LLM p95: 1,436.6 ms at 75 users; 2,020.2 ms at 100 users [1-worker baseline] and 1,774.5 ms [2-worker candidate], exceeding the $\le 1.0$s target). While process stability, security isolation, and overload shedding (HTTP 429) pass with zero crashes or leaks, portal API latency targets fail on local hardware.
   - **Target Docker Compose / Nginx Staging**: **UNVERIFIED** until directly benchmarked on staging infrastructure.
-- **Simultaneous Chat Bursts**: Independently tested across 10, 50, and 100 simultaneous chat submissions. The system enforces strict bounded admission ($\text{active generations} + \text{queue depth} = 2 + 10 = 12$), immediately returning structured HTTP 429 (`service_overloaded`) to excess requests with zero timeouts or process deadlocks.
-- **Runtime Separation**: Benchmarks were measured strictly against native Ollama; containerized vLLM runtime performance remains pending live staging validation.
+- **Simultaneous Chat Bursts**: Independently tested across 10, 50, and 100 simultaneous chat submissions. The system enforces strict bounded admission ($\text{active generations} + \text{queue depth} = 2 + 10 = 12$ across dual workers), immediately returning structured HTTP 429 (`service_overloaded`) to excess requests with zero timeouts or process deadlocks.
+- **Runtime Separation**: Staging benchmarks were measured against host-bridged Ollama (`http://host.docker.internal:11434/v1`); fully containerized, air-gapped vLLM runtime performance remains pending live staging validation. Cloud GPU validation metrics on NVIDIA T4 hardware are documented in [`docs/COLAB_VALIDATION.md`](docs/COLAB_VALIDATION.md).
 
-See the [Capacity and Benchmarks Guide](docs/BENCHMARKS.md) and [Local LLM Operations Guide](docs/LLM_OPERATIONS.md).
+See the [Capacity and Benchmarks Guide](docs/BENCHMARKS.md), [Colab GPU Validation Guide](docs/COLAB_VALIDATION.md), and [Local LLM Operations Guide](docs/LLM_OPERATIONS.md).
 
 ## Repository structure
 
@@ -468,6 +486,7 @@ AeroGrid_AI/
 | [Deployment](docs/DEPLOYMENT.md) | Containers, private networking, and offline staging |
 | [Staging Runbook](docs/STAGING_RUNBOOK.md) | Verification gates, operating procedures and rollback |
 | [Benchmarks](docs/BENCHMARKS.md) | Metrics and capacity-testing methodology |
+| [Colab GPU Validation](docs/COLAB_VALIDATION.md) | Google Colab NVIDIA T4 GPU inference benchmarks and artifacts |
 | [Implementation Plan](docs/IMPLEMENTATION_PLAN.md) | Phases and organization prerequisites |
 
 ## Contributing
