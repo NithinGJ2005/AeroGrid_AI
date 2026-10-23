@@ -42,7 +42,7 @@ The interface includes:
 
 «Note: Place the dashboard screenshot at "app/static/aerogrid-dashboard-optimized.jpg" in your repository for the preview image to render correctly. If your screenshot has a different filename or location, update the image path accordingly.»
 
-Core capabilities
+Core Capabilities
 
 Capability| Description
 Conversational interface| Chat experience with source citations, safe error states, request cancellation, and state reset.
@@ -55,11 +55,15 @@ Load protection| Configurable inference concurrency, queue depth, wait time, tim
 Private deployment path| Docker Compose, Nginx, internal networking, offline staging scripts, and operational runbooks.
 
 «[!IMPORTANT]
-Implemented code paths are not the same as production validation. The local staging configuration has passed reported live checks for Nginx HTTPS termination, HTTP-to-HTTPS redirect, session authentication, server-side RBAC, edge rate limiting, interactive Next.js frontend proxy integration, and real local model inference (bridged to host Ollama "qwen2.5:3b"). However, this bridged setup is distinct from the planned fully containerized, air-gapped vLLM deployment, corporate OIDC/SSO integration is cryptographically simulated rather than live-federated, and full production rollout still depends on organization-approved databases, document ACLs, and production sign-off. See the "staging runbook" (docs/STAGING_RUNBOOK.md) for the current verification status.»
+Implemented code paths are not the same as production validation. The local staging configuration has passed reported live checks for Nginx HTTPS termination, HTTP-to-HTTPS redirect, session authentication, server-side RBAC, edge rate limiting, interactive Next.js frontend proxy integration, and real local model inference (bridged to host Ollama "qwen2.5:3b").
+
+However, this bridged setup is distinct from the planned fully containerized, air-gapped vLLM deployment. Corporate OIDC/SSO integration is cryptographically simulated rather than live-federated, and full production rollout still depends on organization-approved databases, document ACLs, and production sign-off.
+
+See the "staging runbook" (docs/STAGING_RUNBOOK.md) for the current verification status.»
 
 Architecture
 
-System architecture
+System Architecture
 
 flowchart TB
     EMP[Employee] --> BROWSER[Browser / React UI]
@@ -76,20 +80,20 @@ flowchart TB
     GRAPH --> LLM[Internal OpenAI-compatible<br/>LLM inference endpoint]
     LLM --> MODEL[(Locally staged model weights)]
 
-Component responsibilities
+Component Responsibilities
 
 Layer| Responsibility| Repository locations
-Edge proxy| TLS termination, HTTP-to-HTTPS redirect, security headers, rate limits, and proxying| ""deploy/nginx.conf"" (deploy/nginx.conf), ""deploy/docker-compose.yml"" (deploy/docker-compose.yml)
-Frontend| Chat interface, citation display, errors, cancellation, and state reset| ""app/static/"" (app/static/), ""frontend/"" (frontend/)
-API and identity| FastAPI routes, request validation, identity, permission checks, and health endpoints| ""app/main.py"" (app/main.py), ""app/auth/"" (app/auth/), ""app/security.py"" (app/security.py), ""app/config.py"" (app/config.py)
-Orchestration| Bounded state graph, tool selection, tool results, and response synthesis| ""app/orchestration/graph.py"" (app/orchestration/graph.py), ""app/orchestration/service.py"" (app/orchestration/service.py)
-Tool boundary| MCP-style schemas, tool registry, and independent tool permission checks| ""app/orchestration/mcp.py"" (app/orchestration/mcp.py)
-Documents| Approved-root discovery, extraction, chunking, lexical search, ACLs, and citations| ""app/documents/"" (app/documents/)
-Database| Reviewed query catalog, parameter validation, limits, timeouts, and auditing| ""app/db/"" (app/db/)
-Inference| Internal chat-completions client, timeout and concurrency controls, and metrics| ""app/llm/service.py"" (app/llm/service.py)
-Operations| Containers, offline staging, deployment and rollback procedures| ""deploy/"" (deploy/), ""docs/"" (docs/), ""scripts/"" (scripts/), ""tests/"" (tests/)
+Edge proxy| TLS termination, HTTP-to-HTTPS redirect, security headers, rate limits, and proxying| "deploy/nginx.conf", "deploy/docker-compose.yml"
+Frontend| Chat interface, citation display, errors, cancellation, and state reset| "app/static/", "frontend/"
+API and identity| FastAPI routes, request validation, identity, permission checks, and health endpoints| "app/main.py", "app/auth/", "app/security.py", "app/config.py"
+Orchestration| Bounded state graph, tool selection, tool results, and response synthesis| "app/orchestration/graph.py", "app/orchestration/service.py"
+Tool boundary| MCP-style schemas, tool registry, and independent tool permission checks| "app/orchestration/mcp.py"
+Documents| Approved-root discovery, extraction, chunking, lexical search, ACLs, and citations| "app/documents/"
+Database| Reviewed query catalog, parameter validation, limits, timeouts, and auditing| "app/db/"
+Inference| Internal chat-completions client, timeout and concurrency controls, and metrics| "app/llm/service.py"
+Operations| Containers, offline staging, deployment and rollback procedures| "deploy/", "docs/", "scripts/", "tests/"
 
-Request flow
+Request Flow
 
 Each request passes API authentication and permission checks before the assistant can use internal tools.
 
@@ -118,7 +122,7 @@ flowchart TD
     I --> T[Synthesize response]
     T --> U[Return text, citations, and request ID]
 
-Available tool contracts
+Available Tool Contracts
 
 Tool| Purpose| Required permission| Restrictions
 "search_documents"| Search internal document chunks| "documents:search"| Approved roots only; ACL filtering before content is returned; safe citation metadata.
@@ -126,7 +130,7 @@ Tool| Purpose| Required permission| Restrictions
 
 MCP defines the internal tool contract; it is not an authentication boundary. Each tool independently checks the caller's server-side identity and required permission.
 
-Document retrieval flow
+Document Retrieval Flow
 
 flowchart LR
     ROOT[Configured approved roots] --> SCAN[Discover supported files]
@@ -147,7 +151,7 @@ Retrieval notes:
 - Missing or malformed ACL files deny retrieval.
 - Citations expose safe metadata such as filename, document ID, and page, not absolute filesystem paths.
 
-Security model
+Security Model
 
 Security is enforced by the API and tool services, not by frontend state or model instructions alone.
 
@@ -163,11 +167,13 @@ Capacity protection| Process-local inference concurrency, bounded queue depth, q
 Container hardening| Non-root application user, restricted network topology, read-only mounts for selected inputs, and no-new-privileges.
 
 «[!NOTE]
-These are repository-described controls, not a substitute for runtime verification. Corporate OIDC/SSO configuration, production permission mappings, database credentials and policies, model licensing and approval, TLS trust, audit retention, and staging evidence must be supplied or verified by the organization. The Python inference admission controller is process-local, not a cluster-wide queue.»
+These are repository-described controls, not a substitute for runtime verification. Corporate OIDC/SSO configuration, production permission mappings, database credentials and policies, model licensing and approval, TLS trust, audit retention, and staging evidence must be supplied or verified by the organization.
 
-Technology stack
+The Python inference admission controller is process-local, not a cluster-wide queue.»
 
-Backend and orchestration
+Technology Stack
+
+Backend and Orchestration
 
 Technology| Role
 Python 3.11–3.13| Backend runtime
@@ -196,7 +202,7 @@ next-themes| Theme support
 
 The repository contains both a FastAPI-served static UI in "app/static/" and a modular frontend under "frontend/enterprise-intranet-ai-assistant1/". The served entry point depends on the runtime configuration. The current Compose file defines the FastAPI service and does not define a separate Next.js service.
 
-Runtime and operations
+Runtime and Operations
 
 Technology| Role
 Nginx| Reverse proxy, TLS termination, headers, and rate limiting
@@ -208,7 +214,7 @@ Capacity benchmark harness| Exercises inference admission and overload behavior
 
 The production database engine/driver and exact local model must be selected and approved by the organization. A candidate model label does not mean the model has passed license, security, or performance review.
 
-Local development
+Local Development
 
 Prerequisites
 
@@ -218,71 +224,76 @@ Prerequisites
 - Optional: Node.js and pnpm for the modular Next.js frontend
 - An internally reachable OpenAI-compatible inference endpoint for model-backed chat
 
-Setup steps
+Setup Steps
 
-1. Clone the repository:
-   
-   git clone https://github.com/NithinGJ2005/AeroGrid_AI.git
+1. Clone the repository
+
+git clone https://github.com/NithinGJ2005/AeroGrid_AI.git
 cd AeroGrid_AI
 
-2. Create a virtual environment and install dependencies:
-   
-   Windows PowerShell:
-   
-   python -m venv .venv
+2. Create a virtual environment and install dependencies
+
+Windows PowerShell:
+
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
-   
-   Linux / macOS:
-   
-   python3 -m venv .venv
+
+Linux / macOS:
+
+python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e ".[dev]"
-   
-   «For offline work, use the approved internal package source or staged wheelhouse. A normal pip install may require network access.»
 
-3. Configure the environment:
-   
-   Windows PowerShell:
-   
-   Copy-Item .env.example .env
-   
-   Linux / macOS:
-   
-   cp .env.example .env
-   
-   Edit ".env" for the local environment. Replace example secrets with a fresh, non-production secret of at least 32 characters. Never commit ".env", real credentials, tokens, private keys, production data, or model weights. Local development defaults are not production settings.
+«For offline work, use the approved internal package source or staged wheelhouse. A normal pip install may require network access.»
 
-4. Start the API:
-   
-   python -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000
-   
-   Open the following local endpoints:
-   
-   - Application: "http://127.0.0.1:8000/" (http://127.0.0.1:8000/)
-   - Liveness: "http://127.0.0.1:8000/health/live" (http://127.0.0.1:8000/health/live)
-   - Readiness: "http://127.0.0.1:8000/health/ready" (http://127.0.0.1:8000/health/ready)
-   - OpenAPI docs: "http://127.0.0.1:8000/docs" (http://127.0.0.1:8000/docs) (when enabled by configuration)
+3. Configure the environment
 
-5. Run the modular frontend (optional):
-   
-   Development mode:
-   
-   cd frontend/enterprise-intranet-ai-assistant1
+Windows PowerShell:
+
+Copy-Item .env.example .env
+
+Linux / macOS:
+
+cp .env.example .env
+
+Edit ".env" for the local environment. Replace example secrets with a fresh, non-production secret of at least 32 characters.
+
+Never commit ".env", real credentials, tokens, private keys, production data, or model weights. Local development defaults are not production settings.
+
+4. Start the API
+
+python -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000
+
+Open the following local endpoints:
+
+- Application: "http://127.0.0.1:8000/"
+- Liveness: "http://127.0.0.1:8000/health/live"
+- Readiness: "http://127.0.0.1:8000/health/ready"
+- OpenAPI docs: "http://127.0.0.1:8000/docs" (when enabled by configuration)
+
+5. Run the modular frontend (optional)
+
+Development mode:
+
+cd frontend/enterprise-intranet-ai-assistant1
 pnpm install
 pnpm dev
-   
-   Production build against containerized staging backend:
-   
-   cd frontend/enterprise-intranet-ai-assistant1
+
+Production build against the containerized staging backend:
+
+cd frontend/enterprise-intranet-ai-assistant1
 npm install
 npm run build
+
+In Windows PowerShell, configure the internal CA certificate and start Next.js:
+
 $env:NODE_EXTRA_CA_CERTS = "D:\MultiAgent\deploy\certs\server.crt"
 .\node_modules\.bin\next.cmd start -p 3000
-   
-   «The production Next.js configuration proxies "/api/v1/:path*" to the Nginx TLS port ("https://127.0.0.1:443"). "NODE_EXTRA_CA_CERTS" is required so the Node.js reverse-proxy runtime trusts the internal staging CA certificate without disabling TLS validation.»
 
-API overview
+«The production Next.js configuration proxies "/api/v1/:path*" to the Nginx TLS port ("https://127.0.0.1:443"). "NODE_EXTRA_CA_CERTS" is required so the Node.js reverse-proxy runtime trusts the internal staging CA certificate without disabling TLS validation.»
+
+API Overview
 
 Available routes and behavior depend on the running configuration and caller permissions.
 
@@ -298,9 +309,9 @@ Endpoint| Method| Purpose
 
 Use the running OpenAPI specification for exact request and response schemas. Do not expose the API outside the intended internal security boundary.
 
-Data and model integration
+Data and Model Integration
 
-Database integration
+Database Integration
 
 Configure "DATABASE_URL" only after the organization confirms the database engine, approved SQLAlchemy driver, network/TLS policy, read-only service account, schema, timeout policy, and reviewed query catalog.
 
@@ -311,7 +322,7 @@ Configure "DATABASE_URL" only after the organization confirms the database engin
 
 See the "Database Integration Guide" (docs/DATABASE_INTEGRATION.md).
 
-Document integration
+Document Integration
 
 Set "DOCUMENT_ROOTS" to administrator-approved internal directories. Place supported files and adjacent ACL sidecars such as:
 
@@ -319,9 +330,11 @@ Set "DOCUMENT_ROOTS" to administrator-approved internal directories. Place suppo
   "allowed_roles": ["employee"]
 }
 
-Use the actual organization role names, validate ACL ownership, and ensure missing or malformed ACLs deny retrieval. See the "Document Retrieval Guide" (docs/DOCUMENT_RETRIEVAL.md).
+Use the actual organization role names, validate ACL ownership, and ensure missing or malformed ACLs deny retrieval.
 
-Local model integration
+See the "Document Retrieval Guide" (docs/DOCUMENT_RETRIEVAL.md).
+
+Local Model Integration
 
 Configure "LLM_ENABLED", "LLM_BASE_URL", "LLM_ALLOWED_HOSTS", and "LLM_MODEL" for the approved internal model-serving endpoint. Stage weights and tokenizer files locally; do not rely on startup-time downloads.
 
@@ -331,11 +344,11 @@ Configure "LLM_ENABLED", "LLM_BASE_URL", "LLM_ALLOWED_HOSTS", and "LLM_MODEL" fo
 
 See the "Local LLM Operations Guide" (docs/LLM_OPERATIONS.md).
 
-Deployment and operations
+Deployment and Operations
 
 The repository includes a deployment specification and staging runbook for a single-host private-network topology.
 
-Deployment pipeline
+Deployment Pipeline
 
 flowchart TD
     BUILD[Trusted build workstation] --> WHEELS[Stage pinned dependency wheels]
@@ -354,13 +367,13 @@ flowchart TD
     START --> TEST[Live TLS, redirect, rate-limit, RBAC, and UI checks]
     TEST --> SIGNOFF[Operations, security, and change-control sign-off]
 
-Compose services
+Compose Services
 
 Service| Purpose| Notes
 "reverse-proxy"| Nginx entry point on ports 80 and 443| TLS certificate/key and "nginx.conf" mounted read-only.
 "app"| FastAPI, authentication, orchestration, document and database tools| Application port is not published to the host; uses internal networks.
 
-Testing and verification
+Testing and Verification
 
 Run the automated test suite from the repository root:
 
@@ -378,7 +391,7 @@ Contributing
 
 License
 
-See LICENSE.
+See "LICENSE" (LICENSE).
 
 <div align="center">
   <p><strong>AeroGrid AI</strong></p>
