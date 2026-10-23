@@ -1,8 +1,8 @@
-<div align="center">
+[<div align="center">
   <img src="app/static/logo.png" alt="AeroGrid AI logo" width="128" />
   <h1>AeroGrid AI</h1>
   <p><strong>Connected intelligence. Clear direction.</strong></p>
-  <p>A private enterprise AI assistant for searching organizational knowledge, querying approved internal data, and helping employees find trusted answers.</p>
+  <p>Ahttps://github.com/NithinGJ2005/AeroGrid_AI private enterprise AI assistant for searching organizational knowledge, querying approved internal data, and helping employees find trusted answers.</p>
   <p>
     <a href="https://www.python.org/"><img alt="Python 3.11–3.13" src="https://img.shields.io/badge/Python-3.11--3.13-3776AB?style=for-the-badge&logo=python&logoColor=white"></a>
     <a href="https://fastapi.tiangolo.com/"><img alt="FastAPI" src="https://img.shields.io/badge/API-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white"></a>
@@ -398,3 +398,4 @@ See "LICENSE" (LICENSE).
   <p>Connected intelligence. Clear direction.</p>
   <p>Built for private, permission-aware enterprise knowledge access.</p>
 </div>
+](https://github.com/NithinGJ2005/AeroGrid_AI)
